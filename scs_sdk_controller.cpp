@@ -10,6 +10,12 @@
 #  include <sys/mman.h>
 #  include <unistd.h>
 #endif
+#ifdef __APPLE__
+#  include <fcntl.h>
+#  include <sys/mman.h>
+#  include <unistd.h>
+#  include <sys/stat.h>
+#endif
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -85,6 +91,49 @@ void initialize_shared_memory(const unsigned int shm_size)
     }
 
     shm_fd = open(shm_file.c_str(), O_CREAT | O_RDWR , S_IRUSR | S_IWUSR);
+    if (shm_fd == -1) {
+        throw runtime_error("Failed to create shm file");
+    }
+
+    // Truncate and zero the shm file
+    if (ftruncate(shm_fd, shm_size) == -1) {
+        close(shm_fd);
+        throw runtime_error("Failed to truncate shm file");
+    }
+
+    shm_buff_ptr = (uint8_t*)mmap(nullptr, shm_size, PROT_READ, MAP_SHARED, shm_fd, 0);
+    if (shm_buff_ptr == MAP_FAILED) {
+        close(shm_fd);
+        throw runtime_error("Failed mmap shm");
+    }
+    m_shm_size = shm_size;
+}
+
+void deinitialize_shared_memory()
+{
+    if (shm_buff_ptr) {
+        munmap(shm_buff_ptr, m_shm_size);
+        m_shm_size = 0;
+        shm_buff_ptr = nullptr;
+    }
+
+    if (shm_fd != -1) {
+        close(shm_fd);
+        shm_fd = -1;
+    }
+}
+#endif
+
+#ifdef __APPLE__
+int shm_fd = -1;
+unsigned int m_shm_size = 0;
+uint8_t* shm_buff_ptr = nullptr;
+
+void initialize_shared_memory(const unsigned int shm_size)
+{
+    const string shm_file = "/tmp/SCSControls";
+
+    shm_fd = shm_open(shm_file.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
     if (shm_fd == -1) {
         throw runtime_error("Failed to create shm file");
     }
@@ -226,6 +275,13 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason_for_call, LPVOID reseved)
 
 #ifdef __linux__
 void __attribute__ ((destructor)) unload()
+{
+    deinitialize_shared_memory();
+}
+#endif
+
+#ifdef __APPLE__
+void unload()
 {
     deinitialize_shared_memory();
 }
